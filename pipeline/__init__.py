@@ -1,0 +1,1 @@
+from .attn_processor import PersonalizeAnythingAttnProcessor, set_flux_transformer_attn_processor

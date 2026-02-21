@@ -1,0 +1,106 @@
+{
+  "last_node_id": 8,
+  "last_link_id": 8,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "DiT360PipelineLoader",
+      "pos": [100, 200],
+      "size": [400, 180],
+      "properties": {},
+      "widgets_values": [
+        "black-forest-labs/FLUX.1-dev",
+        "Insta360-Research/DiT360-Panorama-Image-Generation",
+        "float16",
+        true,
+        true
+      ]
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [100, 500],
+      "size": [300, 200],
+      "properties": {},
+      "widgets_values": ["panorama.png", "image"]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [100, 800],
+      "size": [300, 200],
+      "properties": {},
+      "widgets_values": ["mask.png", "image"]
+    },
+    {
+      "id": 4,
+      "type": "DiT360MaskProcessor",
+      "pos": [500, 800],
+      "size": [300, 100],
+      "properties": {}
+    },
+    {
+      "id": 5,
+      "type": "DiT360ImageInverter",
+      "pos": [600, 350],
+      "size": [400, 200],
+      "properties": {},
+      "widgets_values": [
+        "",
+        50,
+        1.0
+      ]
+    },
+    {
+      "id": 6,
+      "type": "DiT360PanoramaEditor",
+      "pos": [1100, 350],
+      "size": [450, 400],
+      "properties": {},
+      "widgets_values": [
+        "outpaint",
+        "This is a panorama image.",
+        "This is a panorama image. A beautiful mountain landscape with a lake",
+        50,
+        1.0,
+        50,
+        2.8,
+        42,
+        0.0,
+        0.99,
+        0.5
+      ]
+    },
+    {
+      "id": 7,
+      "type": "Equirect360EdgeBlender",
+      "pos": [1650, 350],
+      "size": [300, 120],
+      "properties": {},
+      "widgets_values": [10, "cosine"]
+    },
+    {
+      "id": 8,
+      "type": "Equirect360Viewer",
+      "pos": [2050, 350],
+      "size": [400, 350],
+      "properties": {},
+      "widgets_values": [4096]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 5, 0, "DIT360_PIPELINE"],
+    [2, 2, 0, 5, 1, "IMAGE"],
+    [3, 1, 0, 6, 0, "DIT360_PIPELINE"],
+    [4, 5, 0, 6, 1, "DIT360_INVERTED"],
+    [5, 4, 0, 6, 2, "MASK"],
+    [6, 3, 0, 4, 0, "MASK"],
+    [7, 6, 0, 7, 0, "IMAGE"],
+    [8, 7, 0, 8, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "info": "DiT360Plus: Inpainting/Outpainting workflow. Load a panorama + mask, invert, then edit."
+  }
+}

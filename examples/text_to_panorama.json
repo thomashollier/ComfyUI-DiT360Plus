@@ -1,0 +1,60 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "DiT360PipelineLoader",
+      "pos": [100, 200],
+      "size": [400, 180],
+      "properties": {},
+      "widgets_values": [
+        "black-forest-labs/FLUX.1-dev",
+        "Insta360-Research/DiT360-Panorama-Image-Generation",
+        "float16",
+        true,
+        true
+      ]
+    },
+    {
+      "id": 2,
+      "type": "DiT360TextToPanorama",
+      "pos": [600, 200],
+      "size": [400, 280],
+      "properties": {},
+      "widgets_values": [
+        "This is a panorama image. A serene Japanese garden with cherry blossoms, a wooden bridge over a koi pond, and Mount Fuji in the background",
+        2048,
+        50,
+        2.8,
+        42
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Equirect360EdgeBlender",
+      "pos": [1100, 200],
+      "size": [300, 120],
+      "properties": {},
+      "widgets_values": [10, "cosine"]
+    },
+    {
+      "id": 4,
+      "type": "Equirect360Viewer",
+      "pos": [1500, 200],
+      "size": [400, 350],
+      "properties": {},
+      "widgets_values": [4096]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "DIT360_PIPELINE"],
+    [2, 2, 0, 3, 0, "IMAGE"],
+    [3, 3, 0, 4, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "info": "DiT360Plus: Text to 360 Panorama workflow"
+  }
+}
