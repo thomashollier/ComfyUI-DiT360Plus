@@ -19,7 +19,7 @@ Based on the research paper: [DiT360: Panoramic Image Generation](https://fengho
 
 | Node | Description |
 |------|-------------|
-| **DiT360 Pipeline Loader** | Loads FLUX.1-dev + DiT360 LoRA adapter with configurable VRAM management |
+| **Flux Panorama Loader** | Loads any FLUX model (FLUX.1-dev, Kontext) with optional LoRA and configurable VRAM management |
 | **DiT360 Text to Panorama** | Generates 360 panorama from a text prompt |
 | **DiT360 Pipeline Unloader** | Frees GPU memory when done |
 
@@ -27,6 +27,7 @@ Based on the research paper: [DiT360: Panoramic Image Generation](https://fengho
 
 | Node | Description |
 |------|-------------|
+| **Kontext Panorama Editor** | Inpaints panorama regions using FLUX Kontext (image + mask + prompt) |
 | **DiT360 Image Inverter** | Inverts an image via RF-Inversion for editing |
 | **DiT360 Panorama Editor** | Inpaints or outpaints using inverted latents + mask |
 
@@ -70,10 +71,10 @@ The DiT360 LoRA weights are downloaded automatically from [Insta360-Research/DiT
 The simplest workflow: generate a 360 panorama from text.
 
 ```
-DiT360 Pipeline Loader -> DiT360 Text to Panorama -> 360 Edge Blender -> 360 Viewer
+Flux Panorama Loader -> DiT360 Text to Panorama -> 360 Edge Blender -> 360 Viewer
 ```
 
-1. Add **DiT360 Pipeline Loader** — select your FLUX model, choose an offload mode
+1. Add **Flux Panorama Loader** — select your FLUX model, set base_pipeline to FLUX.1-dev, add the DiT360 LoRA ID, choose an offload mode
 2. Add **DiT360 Text to Panorama** — enter your prompt (prefix with "This is a panorama image." for best results)
 3. Add **360 Edge Blender** — ensures seamless horizontal wrapping
 4. Add **360 Viewer** — preview the result
@@ -84,12 +85,25 @@ DiT360 Pipeline Loader -> DiT360 Text to Panorama -> 360 Edge Blender -> 360 Vie
 - Guidance scale: 2.8
 - Seed: any
 
-### Inpainting
+### Kontext Inpainting
 
-Edit specific regions within an existing panorama.
+Edit specific regions of a panorama using FLUX Kontext — no inversion step needed.
 
 ```
-Pipeline Loader -----> Image Inverter -----> Panorama Editor -> Edge Blender -> Viewer
+Flux Panorama Loader (Kontext) -> Kontext Panorama Editor -> Save Image / 360 Viewer
+Load Image (panorama + painted mask) --^
+```
+
+1. Add **Flux Panorama Loader** — set base_pipeline to FLUX.1-Kontext-dev, leave LoRA empty
+2. Load your panorama and paint a mask on it (white = area to edit)
+3. **Kontext Panorama Editor** — enter your edit prompt, the masked region is repainted
+
+### RF-Inversion Inpainting
+
+Edit specific regions using the full RF-Inversion pipeline (more control, slower).
+
+```
+Flux Panorama Loader -> Image Inverter -----> Panorama Editor -> Edge Blender -> Viewer
 Load Image (panorama) --^                       ^
 Load Image (mask) -> Mask Processor ------------'
 ```
@@ -103,13 +117,13 @@ Load Image (mask) -> Mask Processor ------------'
 
 Extend a panoramic image with new content.
 
-Same workflow as inpainting, but:
+Same workflow as RF-Inversion inpainting, but:
 - The mask should have white = existing content to keep, black = area to generate
 - Set mode to `outpaint` in the Panorama Editor
 
 ### VRAM Management
 
-The Pipeline Loader offers four CPU offload strategies:
+The Flux Panorama Loader offers four CPU offload strategies:
 
 | Mode | Peak VRAM | Speed | Best For |
 |------|-----------|-------|----------|
@@ -126,8 +140,8 @@ Note: actual VRAM usage will be ~1GB above the set budget due to CUDA overhead, 
 
 | Parameter | Node | Description | Recommended |
 |-----------|------|-------------|-------------|
-| `cpu_offload` | PipelineLoader | VRAM management strategy | `model` for 1024, `balanced` for 2048 |
-| `balanced_offload_gb` | PipelineLoader | GPU budget for balanced mode (GB) | 8-16 |
+| `cpu_offload` | FluxPanoramaLoader | VRAM management strategy | `model` for 1024, `balanced` for 2048 |
+| `balanced_offload_gb` | FluxPanoramaLoader | GPU budget for balanced mode (GB) | 8-16 |
 | `guidance_scale` | TextToPanorama, Editor | Classifier-free guidance | 2.8 |
 | `tau` | Editor | Source preservation strength (0-100) | 50 |
 | `eta` | Editor | RF-Inversion guidance strength | 1.0 |

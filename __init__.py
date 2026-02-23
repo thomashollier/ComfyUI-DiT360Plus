@@ -5,13 +5,14 @@ Nodes for generating and editing seamless 360-degree equirectangular panoramic
 images using FLUX.1-dev with the DiT360 LoRA adapter.
 
 PIPELINE NODES:
-  - DiT360PipelineLoader     : Load FLUX + DiT360 LoRA
+  - FluxPanoramaLoader       : Load any FLUX model with optional LoRA
   - DiT360TextToPanorama     : Generate panorama from text
   - DiT360PipelineUnloader   : Free GPU memory
 
 EDITING NODES:
   - DiT360ImageInverter      : Invert image for editing
   - DiT360PanoramaEditor     : Inpaint/outpaint panoramas
+  - KontextPanoramaEditor    : Kontext-based panorama inpainting
 
 ENHANCEMENT NODES:
   - Equirect360EmptyLatent   : 2:1 aspect ratio latent helper
@@ -42,17 +43,33 @@ from .nodes_enhancement import (
     NODE_DISPLAY_NAME_MAPPINGS as ENHANCEMENT_NAMES,
 )
 
+# Flux panorama loader (Kontext-compatible)
+from .nodes_flux_pano import (
+    NODE_CLASS_MAPPINGS as FLUX_PANO_NODES,
+    NODE_DISPLAY_NAME_MAPPINGS as FLUX_PANO_NAMES,
+)
+
+# Kontext editing nodes
+from .nodes_kontext import (
+    NODE_CLASS_MAPPINGS as KONTEXT_NODES,
+    NODE_DISPLAY_NAME_MAPPINGS as KONTEXT_NAMES,
+)
+
 # Merge all node mappings
 NODE_CLASS_MAPPINGS = {
     **PIPELINE_NODES,
     **EDITING_NODES,
     **ENHANCEMENT_NODES,
+    **FLUX_PANO_NODES,
+    **KONTEXT_NODES,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     **PIPELINE_NAMES,
     **EDITING_NAMES,
     **ENHANCEMENT_NAMES,
+    **FLUX_PANO_NAMES,
+    **KONTEXT_NAMES,
 }
 
 # Register web directory for Three.js viewer

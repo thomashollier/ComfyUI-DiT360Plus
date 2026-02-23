@@ -13,8 +13,10 @@ ComfyUI custom nodes for 360-degree panoramic image generation using FLUX.1-dev 
 
 | File | Nodes | Purpose |
 |------|-------|---------|
-| `nodes_pipeline.py` | PipelineLoader, TextToPanorama, PipelineUnloader | Model loading and text-to-pano generation |
+| `nodes_flux_pano.py` | FluxPanoramaLoader | Load any FLUX model (dev, Kontext) with optional LoRA |
+| `nodes_pipeline.py` | TextToPanorama, PipelineUnloader | Text-to-pano generation and memory cleanup |
 | `nodes_editing.py` | ImageInverter, PanoramaEditor | RF-Inversion based inpainting/outpainting |
+| `nodes_kontext.py` | KontextPanoramaEditor | Kontext-based panorama inpainting |
 | `nodes_enhancement.py` | EdgeBlender, EmptyLatent, MaskProcessor, Viewer | Post-processing and utilities |
 
 ### Pipeline Code (`pipeline/`)
@@ -37,6 +39,7 @@ ComfyUI custom nodes for 360-degree panoramic image generation using FLUX.1-dev 
 | File | Purpose |
 |------|---------|
 | `equirect360_viewer.js` | 360 panorama preview widget for ComfyUI |
+| `flux_pano_loader_widgets.js` | Greys out LoRA field when Kontext is selected |
 
 ## Key Technical Concepts
 
@@ -63,7 +66,7 @@ Internal: `mask=1` = preserve from source, `mask=0` = generate new content.
 
 ## Custom Types
 
-- `DIT360_PIPELINE` — FluxPipeline with DiT360 LoRA, tagged with `_dit360_offload`, `_dit360_balanced_gb`, `_dit360_no_split`
+- `DIT360_PIPELINE` — FluxPipeline (with optional LoRA), tagged with `_dit360_offload`, `_dit360_balanced_gb`, `_dit360_no_split`
 - `DIT360_INVERTED` — Dict with `inverted_latents`, `image_latents`, `latent_image_ids`, `height`, `width`
 
 ## Development Notes
