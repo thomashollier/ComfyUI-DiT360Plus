@@ -12,6 +12,71 @@ from PIL import Image
 from .attn_processor import PersonalizeAnythingAttnProcessor, set_flux_transformer_attn_processor
 
 
+def _should_offload(pipe):
+    """Check if we need manual component offloading."""
+    return getattr(pipe, '_dit360_offload', 'off') != 'off'
+
+
+def _move_to(pipe, component_name, device):
+    """Move a pipeline component to a device."""
+    comp = getattr(pipe, component_name, None)
+    if comp is not None:
+        comp.to(device)
+
+
+def _free_vram():
+    """Empty CUDA cache."""
+    torch.cuda.empty_cache()
+
+
+def _dispatch_balanced(pipe, batch_size=1, height=1024, width=2048):
+    """Dynamically dispatch transformer across GPU/CPU for balanced mode.
+
+    Queries actual free VRAM and packs as many transformer layers as possible,
+    reserving space for activations based on batch size and resolution.
+    The user's balanced_offload_gb acts as a hard cap.
+    """
+    from accelerate import infer_auto_device_map, dispatch_model
+
+    user_cap_gb = getattr(pipe, '_dit360_balanced_gb', 8.0)
+    no_split = getattr(pipe, '_dit360_no_split', [])
+
+    # Query actual free VRAM right now (text encoders already off GPU)
+    free_bytes, _ = torch.cuda.mem_get_info()
+    free_gb = free_bytes / (1024 ** 3)
+
+    # Estimate activation memory: batch_size × sequence_length × hidden_dim × overhead
+    seq_len = (height // 16) * (width // 16 + 2)  # with circular padding
+    # ~50 bytes per token per layer active at once (conservative estimate for intermediates)
+    activation_gb = (batch_size * seq_len * 3072 * 50) / (1024 ** 3)
+    activation_gb = max(activation_gb, 2.0)  # at least 2GB reserve
+
+    # Budget = free VRAM minus activation reserve, capped by user setting
+    budget_gb = min(free_gb - activation_gb, user_cap_gb)
+    budget_gb = max(budget_gb, 2.0)  # always at least 2GB for transformer
+
+    device_map = infer_auto_device_map(
+        pipe.transformer,
+        max_memory={0: f"{budget_gb}GiB", "cpu": "128GiB"},
+        no_split_module_classes=no_split,
+    )
+    dispatch_model(pipe.transformer, device_map)
+
+    n_gpu = sum(1 for v in device_map.values() if str(v) in ("0", "cuda:0"))
+    n_cpu = sum(1 for v in device_map.values() if str(v) == "cpu")
+    print(f"[DiT360Plus] Balanced dispatch: {n_gpu} groups on GPU, {n_cpu} on CPU "
+          f"({budget_gb:.1f}GB used, {activation_gb:.1f}GB reserved for activations, "
+          f"batch={batch_size}, {width}x{height})")
+
+
+def _teardown_balanced(pipe):
+    """Remove dispatch hooks and move transformer back to CPU."""
+    from accelerate.hooks import remove_hook_from_submodules
+    remove_hook_from_submodules(pipe.transformer)
+    pipe.transformer.to("cpu")
+    torch.cuda.empty_cache()
+
+
 def _pack_latents(latents, batch_size, num_channels_latents, height, width):
     """Pack spatial latents into FLUX sequence format."""
     latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
@@ -103,12 +168,16 @@ def invert_image(
     Returns:
         dict with keys: inverted_latents, image_latents, latent_image_ids, height, width
     """
-    device = pipe.device
-    dtype = pipe.text_encoder.dtype if pipe.text_encoder is not None else pipe.transformer.dtype
+    device = torch.device("cuda")
+    dtype = pipe.transformer.dtype
+    offload = _should_offload(pipe)
 
     num_channels_latents = pipe.transformer.config.in_channels // 4
 
-    # Encode image
+    # --- Step 1: Encode image (VAE on GPU) ---
+    if offload:
+        _move_to(pipe, 'vae', device)
+
     image_processed = pipe.image_processor.preprocess(
         image=image, height=height, width=width
     )
@@ -116,6 +185,10 @@ def invert_image(
     x0 = pipe.vae.encode(image_processed).latent_dist.sample()
     x0 = (x0 - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
     x0 = x0.to(dtype)
+
+    if offload:
+        _move_to(pipe, 'vae', "cpu")
+        _free_vram()
 
     # Pack latents
     lat_h = height // pipe.vae_scale_factor
@@ -144,12 +217,24 @@ def invert_image(
     timesteps = pipe.scheduler.timesteps
     scheduler_sigmas = pipe.scheduler.sigmas
 
-    # Encode source prompt
+    # --- Step 2: Encode prompt (text encoders on GPU) ---
+    if offload:
+        _move_to(pipe, 'text_encoder', device)
+        _move_to(pipe, 'text_encoder_2', device)
+
     prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(
         prompt=source_prompt,
         prompt_2=source_prompt,
         device=device,
     )
+    prompt_embeds = prompt_embeds.to(device)
+    pooled_prompt_embeds = pooled_prompt_embeds.to(device)
+    text_ids = text_ids.to(device)
+
+    if offload:
+        _move_to(pipe, 'text_encoder', "cpu")
+        _move_to(pipe, 'text_encoder_2', "cpu")
+        _free_vram()
 
     # Guidance
     if pipe.transformer.config.guidance_embeds:
@@ -157,7 +242,14 @@ def invert_image(
     else:
         guidance = None
 
-    # Forward ODE: invert from clean image to noise
+    # --- Step 3: Forward ODE (transformer on GPU) ---
+    offload_mode = getattr(pipe, '_dit360_offload', 'off')
+    if offload_mode == 'balanced':
+        _dispatch_balanced(pipe, batch_size=1, height=height, width=width)
+    elif offload_mode == 'model':
+        _move_to(pipe, 'transformer', device)
+    # 'sequential': accelerate hooks already in place from loader
+
     Y_t = image_latents.clone()
     y_1 = torch.randn(Y_t.shape, device=device, dtype=dtype)
     N = len(scheduler_sigmas)
@@ -183,6 +275,14 @@ def invert_image(
 
         if callback is not None:
             callback(i + 1, N - 1)
+
+    if offload_mode == 'balanced':
+        _teardown_balanced(pipe)
+    elif offload_mode == 'model':
+        _move_to(pipe, 'transformer', "cpu")
+        _free_vram()
+    elif offload_mode == 'sequential':
+        _free_vram()
 
     return {
         "inverted_latents": Y_t,
@@ -233,12 +333,13 @@ def edit_panorama(
     Returns:
         PIL Image of the edited panorama.
     """
-    device = pipe.device
-    dtype = pipe.text_encoder.dtype if pipe.text_encoder is not None else pipe.transformer.dtype
+    device = torch.device("cuda")
+    dtype = pipe.transformer.dtype
+    offload = _should_offload(pipe)
 
-    inverted_latents = inverted_data["inverted_latents"]
-    image_latents = inverted_data["image_latents"]
-    latent_image_ids = inverted_data["latent_image_ids"]
+    inverted_latents = inverted_data["inverted_latents"].to(device)
+    image_latents = inverted_data["image_latents"].to(device)
+    latent_image_ids = inverted_data["latent_image_ids"].to(device)
     height = inverted_data["height"]
     width = inverted_data["width"]
 
@@ -256,12 +357,24 @@ def edit_panorama(
         ),
     )
 
-    # Encode prompts: [source_prompt, edit_prompt]
+    # --- Step 1: Encode prompts (text encoders on GPU) ---
+    if offload:
+        _move_to(pipe, 'text_encoder', device)
+        _move_to(pipe, 'text_encoder_2', device)
+
     prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(
         prompt=[source_prompt, edit_prompt],
         prompt_2=[source_prompt, edit_prompt],
         device=device,
     )
+    prompt_embeds = prompt_embeds.to(device)
+    pooled_prompt_embeds = pooled_prompt_embeds.to(device)
+    text_ids = text_ids.to(device)
+
+    if offload:
+        _move_to(pipe, 'text_encoder', "cpu")
+        _move_to(pipe, 'text_encoder_2', "cpu")
+        _free_vram()
 
     # Prepare latents: source inverted + new random noise
     generator = torch.Generator(device=device).manual_seed(seed)
@@ -311,7 +424,14 @@ def edit_panorama(
 
     y_0 = image_latents.clone()
 
-    # Denoising loop with RF-Inversion control
+    # --- Step 2: Denoise (transformer on GPU) ---
+    offload_mode = getattr(pipe, '_dit360_offload', 'off')
+    if offload_mode == 'balanced':
+        _dispatch_balanced(pipe, batch_size=2, height=height, width=width)
+    elif offload_mode == 'model':
+        _move_to(pipe, 'transformer', device)
+    # 'sequential': accelerate hooks already in place from loader
+
     for i, t in enumerate(timesteps):
         t_i = 1 - t / 1000
 
@@ -348,31 +468,35 @@ def edit_panorama(
         if callback is not None:
             callback(i + 1, len(timesteps))
 
+    if offload_mode == 'balanced':
+        _teardown_balanced(pipe)
+    elif offload_mode == 'model':
+        _move_to(pipe, 'transformer', "cpu")
+        _free_vram()
+    elif offload_mode == 'sequential':
+        _free_vram()
+
+    # Restore default attention processors
+    from diffusers.models.attention_processor import FluxAttnProcessor2_0
+    pipe.transformer.set_attn_processor(FluxAttnProcessor2_0())
+
     # Remove circular padding
     latents = _remove_circular_padding(latents, n_h, n_w)
 
     # Take the edit branch result (index 1)
     edit_latents = latents[1:2]
 
-    # Unpack and decode
+    # --- Step 3: Decode (VAE on GPU) ---
+    if offload:
+        _move_to(pipe, 'vae', device)
+
     edit_latents = _unpack_latents(edit_latents, height, width, pipe.vae_scale_factor)
     edit_latents = (edit_latents / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
     image = pipe.vae.decode(edit_latents, return_dict=False)[0]
     image = pipe.image_processor.postprocess(image, output_type="pil")
 
-    # Restore default attention processors
-    from diffusers.models.attention_processor import FluxAttnProcessor2_0
-    pipe.transformer.set_attn_processor(FluxAttnProcessor2_0())
+    if offload:
+        _move_to(pipe, 'vae', "cpu")
+        _free_vram()
 
     return image[0]
-
-
-def _unpack_latents(latents, height, width, vae_scale_factor):
-    """Unpack FLUX latents from sequence format to spatial format."""
-    batch_size, num_patches, channels = latents.shape
-    height = height // vae_scale_factor
-    width = width // vae_scale_factor
-    latents = latents.view(batch_size, height // 2, width // 2, channels // 4, 2, 2)
-    latents = latents.permute(0, 3, 1, 4, 2, 5)
-    latents = latents.reshape(batch_size, channels // (2 * 2), height, width)
-    return latents

@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/your-repo/ComfyUI-DiT360Plus"
+Repository = "https://github.com/thomashollier/ComfyUI-DiT360Plus"
 
 [tool.comfy]
 PublisherId = ""

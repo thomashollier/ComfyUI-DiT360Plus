@@ -10,6 +10,71 @@ from typing import Optional, Union, List
 from diffusers import FluxPipeline
 
 
+def _should_offload(pipe):
+    """Check if we need manual component offloading."""
+    return getattr(pipe, '_dit360_offload', 'off') != 'off'
+
+
+def _move_to(pipe, component_name, device):
+    """Move a pipeline component to a device."""
+    comp = getattr(pipe, component_name, None)
+    if comp is not None:
+        comp.to(device)
+
+
+def _free_vram():
+    """Empty CUDA cache."""
+    torch.cuda.empty_cache()
+
+
+def _dispatch_balanced(pipe, batch_size=1, height=1024, width=2048):
+    """Dynamically dispatch transformer across GPU/CPU for balanced mode.
+
+    Queries actual free VRAM and packs as many transformer layers as possible,
+    reserving space for activations based on batch size and resolution.
+    The user's balanced_offload_gb acts as a hard cap.
+    """
+    from accelerate import infer_auto_device_map, dispatch_model
+
+    user_cap_gb = getattr(pipe, '_dit360_balanced_gb', 8.0)
+    no_split = getattr(pipe, '_dit360_no_split', [])
+
+    # Query actual free VRAM right now (text encoders already off GPU)
+    free_bytes, _ = torch.cuda.mem_get_info()
+    free_gb = free_bytes / (1024 ** 3)
+
+    # Estimate activation memory: batch_size × sequence_length × hidden_dim × overhead
+    seq_len = (height // 16) * (width // 16 + 2)  # with circular padding
+    # ~50 bytes per token per layer active at once (conservative estimate for intermediates)
+    activation_gb = (batch_size * seq_len * 3072 * 50) / (1024 ** 3)
+    activation_gb = max(activation_gb, 2.0)  # at least 2GB reserve
+
+    # Budget = free VRAM minus activation reserve, capped by user setting
+    budget_gb = min(free_gb - activation_gb, user_cap_gb)
+    budget_gb = max(budget_gb, 2.0)  # always at least 2GB for transformer
+
+    device_map = infer_auto_device_map(
+        pipe.transformer,
+        max_memory={0: f"{budget_gb}GiB", "cpu": "128GiB"},
+        no_split_module_classes=no_split,
+    )
+    dispatch_model(pipe.transformer, device_map)
+
+    n_gpu = sum(1 for v in device_map.values() if str(v) in ("0", "cuda:0"))
+    n_cpu = sum(1 for v in device_map.values() if str(v) == "cpu")
+    print(f"[DiT360Plus] Balanced dispatch: {n_gpu} groups on GPU, {n_cpu} on CPU "
+          f"({budget_gb:.1f}GB used, {activation_gb:.1f}GB reserved for activations, "
+          f"batch={batch_size}, {width}x{height//1})")
+
+
+def _teardown_balanced(pipe):
+    """Remove dispatch hooks and move transformer back to CPU."""
+    from accelerate.hooks import remove_hook_from_submodules
+    remove_hook_from_submodules(pipe.transformer)
+    pipe.transformer.to("cpu")
+    torch.cuda.empty_cache()
+
+
 def generate_panorama(
     pipe: FluxPipeline,
     prompt: str,
@@ -42,21 +107,30 @@ def generate_panorama(
     Returns:
         PIL Image of the generated panorama.
     """
-    device = pipe.device
+    device = torch.device("cuda")
     dtype = pipe.transformer.dtype
+    offload = _should_offload(pipe)
 
-    # Encode prompt
-    (
-        prompt_embeds,
-        pooled_prompt_embeds,
-        text_ids,
-    ) = pipe.encode_prompt(
+    # --- Step 1: Encode prompt (text encoders on GPU) ---
+    if offload:
+        _move_to(pipe, 'text_encoder', device)
+        _move_to(pipe, 'text_encoder_2', device)
+
+    prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(
         prompt=prompt,
         prompt_2=prompt,
         device=device,
     )
+    prompt_embeds = prompt_embeds.to(device)
+    pooled_prompt_embeds = pooled_prompt_embeds.to(device)
+    text_ids = text_ids.to(device)
 
-    # Prepare latents
+    if offload:
+        _move_to(pipe, 'text_encoder', "cpu")
+        _move_to(pipe, 'text_encoder_2', "cpu")
+        _free_vram()
+
+    # --- Step 2: Prepare latents ---
     num_channels_latents = pipe.transformer.config.in_channels // 4
     generator = torch.Generator(device=device).manual_seed(seed)
 
@@ -118,7 +192,14 @@ def generate_panorama(
     else:
         guidance = None
 
-    # Denoising loop
+    # --- Step 3: Denoise (transformer on GPU) ---
+    offload_mode = getattr(pipe, '_dit360_offload', 'off')
+    if offload_mode == 'balanced':
+        _dispatch_balanced(pipe, batch_size=1, height=height, width=width)
+    elif offload_mode == 'model':
+        _move_to(pipe, 'transformer', device)
+    # 'sequential': accelerate hooks already in place from loader
+
     for i, t in enumerate(timesteps):
         timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
@@ -138,6 +219,14 @@ def generate_panorama(
         if callback is not None:
             callback(i + 1, len(timesteps))
 
+    if offload_mode == 'balanced':
+        _teardown_balanced(pipe)
+    elif offload_mode == 'model':
+        _move_to(pipe, 'transformer', "cpu")
+        _free_vram()
+    elif offload_mode == 'sequential':
+        _free_vram()
+
     # --- Remove circular padding ---
     latents = latents.reshape(bsz, n_h, n_w + 2, dim)
     latents = latents[:, :, 1:-1, :]
@@ -146,10 +235,17 @@ def generate_panorama(
     # Unpack latents
     latents = _unpack_latents(latents, height, width, pipe.vae_scale_factor)
 
-    # Decode
+    # --- Step 4: Decode (VAE on GPU) ---
+    if offload:
+        _move_to(pipe, 'vae', device)
+
     latents = (latents / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
     image = pipe.vae.decode(latents, return_dict=False)[0]
     image = pipe.image_processor.postprocess(image, output_type="pil")
+
+    if offload:
+        _move_to(pipe, 'vae', "cpu")
+        _free_vram()
 
     return image[0]
 
