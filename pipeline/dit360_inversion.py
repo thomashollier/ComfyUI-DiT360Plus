@@ -306,7 +306,6 @@ def edit_panorama(
     seed: int = 0,
     start_timestep: float = 0.0,
     stop_timestep: float = 0.99,
-    mask_blend_threshold: float = 0.5,
     callback=None,
 ):
     """Edit a panorama using inverted latents and mask.
@@ -321,13 +320,13 @@ def edit_panorama(
         source_prompt: Description of source image.
         edit_prompt: Description of desired edit result.
         tau: Attention replacement threshold (0-1). Higher = stronger preservation.
-        eta: RF-Inversion guidance strength.
+        eta: Edit strength at mask=0 positions (0=pure transformer, 1=reconstruct original).
+             Preserve positions (mask=1) always use eta=1.0 regardless.
         num_inference_steps: Denoising steps.
         guidance_scale: Classifier-free guidance scale.
         seed: Random seed.
         start_timestep: Start of eta guidance window (fraction).
         stop_timestep: End of eta guidance window (fraction).
-        mask_blend_threshold: Timestep threshold for mask-based latent blending.
         callback: Optional progress callback(step, total).
 
     Returns:
@@ -452,18 +451,28 @@ def edit_panorama(
             return_dict=False,
         )[0]
 
-        # RF-Inversion controlled denoising (applied to ALL branches)
-        # y_0 broadcasts from (1, N, D) to (2, N, D) across source + edit batches
+        # RF-Inversion controlled denoising with per-token eta.
+        # Source branch (latents[0]) always reconstructs (eta=1.0 everywhere).
+        # Edit branch (latents[1]) uses eta=1.0 at preserve positions (mask=1)
+        # and user eta at edit positions (mask=0), so edits only happen where masked.
         v_t = -noise_pred
         v_t_cond = (y_0 - latents) / (1 - t_i + 1e-8)
         eta_t = eta if start_step <= i < stop_step else 0.0
-        v_hat_t = v_t + eta_t * (v_t_cond - v_t)
+        if mask is not None:
+            mask_flat = mask.to(device=device, dtype=dtype).view(1, -1, 1)  # (1, n_tokens, 1)
+            # preserve positions (mask=1) → always eta=1.0, edit positions (mask=0) → user eta
+            eta_edit = mask_flat + (1 - mask_flat) * eta_t
+            eta_map = torch.cat([torch.ones_like(eta_edit), eta_edit], dim=0)  # (2, n_tokens, 1)
+            v_hat_t = v_t + eta_map * (v_t_cond - v_t)
+        else:
+            v_hat_t = v_t + eta_t * (v_t_cond - v_t)
         latents = latents + v_hat_t * (scheduler_sigmas[i] - scheduler_sigmas[i + 1])
 
-        # Mask-based latent blending: enforce consistency in preserved regions
-        if mask is not None and timestep[0].item() / 1000 >= mask_blend_threshold:
-            flat_mask = mask.to(device).float().view(-1, 1)
-            latents[1] = latents[1] * (1.0 - flat_mask) + latents[0] * flat_mask
+        # Hard latent blending: copy source latents into edit branch at preserve positions.
+        # Applied every step to prevent any drift in preserved regions.
+        if mask is not None:
+            flat_mask = mask.to(device=device, dtype=dtype).view(-1, 1)
+            latents[1] = latents[1] * (1 - flat_mask) + latents[0] * flat_mask
 
         if callback is not None:
             callback(i + 1, len(timesteps))

@@ -31,6 +31,13 @@ Based on the research paper: [DiT360: Panoramic Image Generation](https://fengho
 | **DiT360 Image Inverter** | Inverts an image via RF-Inversion for editing |
 | **DiT360 Panorama Editor** | Inpaints or outpaints using inverted latents + mask |
 
+### Projection
+
+| Node | Description |
+|------|-------------|
+| **Equirect → Perspective** | Extracts a distortion-free perspective view from an equirectangular panorama |
+| **Perspective → Equirect** | Composites an edited perspective patch back into the panorama with feathered blending |
+
 ### Enhancement
 
 | Node | Description |
@@ -98,6 +105,24 @@ Load Image (panorama + painted mask) --^
 2. Load your panorama and paint a mask on it (white = area to edit)
 3. **Kontext Panorama Editor** — enter your edit prompt, the masked region is repainted
 
+### Perspective Editing (Kontext)
+
+Edit a local region of a panorama without equirectangular distortion artifacts. Extract a perspective view, edit it with Kontext, then composite back.
+
+```
+Load Image (panorama) → Equirect→Perspective → PreviewBridge → Kontext Panorama Editor → Perspective→Equirect → 360 Viewer
+                                              ↗ (passthrough)                                ↗
+                         Equirect→Perspective ─────────────────────────────────────────────────'
+```
+
+1. Load your panorama and add **Equirect → Perspective** — set yaw/pitch to aim at the region, fov for zoom level
+2. Add **PreviewBridge** (from Impact Pack) — right-click → "Open in MaskEditor" to paint the edit mask on the perspective view
+3. Add **Kontext Panorama Editor** — enter your edit prompt, receives the perspective image + mask
+4. Add **Perspective → Equirect** — composites the edited patch back with feathered blending
+5. Add **360 Viewer** to preview the result
+
+**Tip:** Use [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) for the PreviewBridge node, which lets you paint masks on images mid-workflow.
+
 ### RF-Inversion Inpainting
 
 Edit specific regions using the full RF-Inversion pipeline (more control, slower).
@@ -144,17 +169,18 @@ Note: actual VRAM usage will be ~1GB above the set budget due to CUDA overhead, 
 | `balanced_offload_gb` | FluxPanoramaLoader | GPU budget for balanced mode (GB) | 8-16 |
 | `guidance_scale` | TextToPanorama, Editor | Classifier-free guidance | 2.8 |
 | `tau` | Editor | Source preservation strength (0-100) | 50 |
-| `eta` | Editor | RF-Inversion guidance strength | 1.0 |
+| `eta` | Editor | Reconstruction vs. edit strength (lower = stronger edit) | 0.6-0.8 |
+| `mask_feather` | Editor | Soft mask edge width as % of image width | 0-3 |
 | `gamma` | Inverter | Inversion fidelity | 1.0 |
 | `blend_width` | EdgeBlender | Edge blend width in pixels | 10-20 |
-| `mask_blend_threshold` | Editor | Timestep threshold for mask blending | 0.5 |
 
 ## Example Workflows
 
 Example workflows are included in the `examples/` folder:
 
 - `text_to_panorama.json` — Basic text-to-panorama generation
-- `inpainting_outpainting.json` — Inpainting/outpainting with mask
+- `DiT360_inpainting.json` — RF-Inversion inpainting/outpainting
+- `LatLong_persp_inpainting.json` — Perspective extraction + Kontext editing
 
 Load these via ComfyUI's **Load Workflow** button.
 

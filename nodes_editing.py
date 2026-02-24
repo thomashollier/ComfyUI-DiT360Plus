@@ -124,12 +124,7 @@ class DiT360PanoramaEditor:
                     "default": "outpaint",
                     "tooltip": "Editing mode. Inpaint: replace white mask area. Outpaint: extend beyond white mask area.",
                 }),
-                "source_prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "This is a panorama image.",
-                    "tooltip": "Description of the source/original image.",
-                }),
-                "edit_prompt": ("STRING", {
+                "prompt": ("STRING", {
                     "multiline": True,
                     "default": "This is a panorama image. A beautiful landscape",
                     "tooltip": "Description of the desired result after editing.",
@@ -141,11 +136,11 @@ class DiT360PanoramaEditor:
                     "tooltip": "Preservation strength (0-100). Higher = stronger source preservation. Recommended: 50.",
                 }),
                 "eta": ("FLOAT", {
-                    "default": 1.0,
+                    "default": 0.75,
                     "min": 0.0,
-                    "max": 2.0,
+                    "max": 1.0,
                     "step": 0.05,
-                    "tooltip": "RF-Inversion guidance. Higher = more faithful to source. Recommended: 1.0.",
+                    "tooltip": "Reconstruction vs. edit strength. 1.0 = pure reconstruction (no change). 0.0 = pure transformer (chaotic). Lower values allow stronger edits. Recommended: 0.6-0.8.",
                 }),
                 "steps": ("INT", {
                     "default": 50,
@@ -179,12 +174,12 @@ class DiT360PanoramaEditor:
                     "step": 0.01,
                     "tooltip": "End of eta guidance window. Recommended: 0.99.",
                 }),
-                "mask_blend_threshold": ("FLOAT", {
-                    "default": 0.5,
+                "mask_feather": ("FLOAT", {
+                    "default": 0.0,
                     "min": 0.0,
-                    "max": 1.0,
-                    "step": 0.05,
-                    "tooltip": "Timestep threshold for mask-based latent blending. Smaller = stricter consistency.",
+                    "max": 50.0,
+                    "step": 0.5,
+                    "tooltip": "Soft mask edge width as percentage of image width. 0 = hard edges. 1-3% gives subtle blending, 5-10% for wider transitions. Resolution-independent.",
                 }),
             }
         }
@@ -193,9 +188,9 @@ class DiT360PanoramaEditor:
     FUNCTION = "edit"
     CATEGORY = "DiT360Plus/editing"
 
-    def edit(self, pipeline, inverted_data, mask, mode, source_prompt, edit_prompt,
+    def edit(self, pipeline, inverted_data, mask, mode, prompt,
              tau, eta, steps, guidance_scale, seed, start_timestep, stop_timestep,
-             mask_blend_threshold):
+             mask_feather):
 
         height = inverted_data["height"]
         width = inverted_data["width"]
@@ -205,8 +200,8 @@ class DiT360PanoramaEditor:
         latent_h = height // (vae_sf * 2)
         latent_w = width // (vae_sf * 2)
 
-        # Process mask: resize to latent dims, apply mode inversion
-        processed_mask = create_mask_for_editing(mask, mode, latent_w, latent_h)
+        # Process mask: resize to latent dims, apply mode inversion, feather edges
+        processed_mask = create_mask_for_editing(mask, mode, latent_w, latent_h, feather=mask_feather)
 
         # Add circular padding and flatten for attention processor
         pipeline_mask = prepare_mask_for_pipeline(processed_mask, latent_w, latent_h)
@@ -223,8 +218,8 @@ class DiT360PanoramaEditor:
                 pipe=pipeline,
                 inverted_data=inverted_data,
                 mask=pipeline_mask,
-                source_prompt=source_prompt,
-                edit_prompt=edit_prompt,
+                source_prompt="",
+                edit_prompt=prompt,
                 tau=tau / 100.0,
                 eta=eta,
                 num_inference_steps=steps,
@@ -232,7 +227,6 @@ class DiT360PanoramaEditor:
                 seed=seed,
                 start_timestep=start_timestep,
                 stop_timestep=stop_timestep,
-                mask_blend_threshold=mask_blend_threshold,
                 callback=progress_callback,
             )
 

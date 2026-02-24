@@ -2,7 +2,7 @@
 
 import torch
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 def create_mask_for_editing(
@@ -10,6 +10,7 @@ def create_mask_for_editing(
     mode: str,
     latent_w: int,
     latent_h: int,
+    feather: float = 0.0,
 ) -> torch.Tensor:
     """Create a properly formatted mask for DiT360 editing pipeline.
 
@@ -25,9 +26,11 @@ def create_mask_for_editing(
               - outpaint: white area = existing content to KEEP (white->1 means preserve)
         latent_w: Target latent width.
         latent_h: Target latent height.
+        feather: Soft edge width as percentage of image width (0-50).
+                 0 = hard binary mask.
 
     Returns:
-        Mask tensor of shape (latent_h, latent_w) with values 0 or 1.
+        Mask tensor of shape (latent_h, latent_w) with values in [0, 1].
     """
     # Normalize to 2D
     if mask_tensor.ndim == 4:
@@ -36,20 +39,32 @@ def create_mask_for_editing(
         mask_tensor = mask_tensor[0]
     # Now (H, W)
 
-    # Resize to latent dimensions using nearest neighbor
+    # Convert to PIL at full image resolution
+    img_h, img_w = mask_tensor.shape
     mask_pil = Image.fromarray(
         (mask_tensor.cpu().numpy() * 255).astype(np.uint8)
     )
-    mask_pil = mask_pil.resize((latent_w, latent_h), Image.Resampling.NEAREST)
+
+    # Binarize at full resolution
     mask_np = np.array(mask_pil)
-    mask = torch.tensor(np.where(mask_np > 127, 1, 0), dtype=torch.float32)
+    mask_binary = np.where(mask_np > 127, 255, 0).astype(np.uint8)
 
     if mode == "inpaint":
-        # For inpainting: white input = edit area -> invert so preserved=1
-        mask = 1 - mask
-    # For outpaint: white input = keep area -> already correct (preserved=1)
+        mask_binary = 255 - mask_binary
 
-    return mask
+    # Apply feather at full image resolution (resolution-independent)
+    if feather > 0:
+        blur_radius = max(1, int(img_w * feather / 100.0))
+        mask_pil = Image.fromarray(mask_binary, mode="L")
+        mask_pil = mask_pil.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        mask_binary = np.array(mask_pil)
+
+    # Downsample to latent dimensions
+    mask_pil = Image.fromarray(mask_binary, mode="L")
+    mask_pil = mask_pil.resize((latent_w, latent_h), Image.Resampling.BILINEAR)
+    mask_np = np.array(mask_pil).astype(np.float32) / 255.0
+
+    return torch.tensor(mask_np, dtype=torch.float32)
 
 
 def prepare_mask_for_pipeline(

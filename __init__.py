@@ -14,6 +14,10 @@ EDITING NODES:
   - DiT360PanoramaEditor     : Inpaint/outpaint panoramas
   - KontextPanoramaEditor    : Kontext-based panorama inpainting
 
+PROJECTION NODES:
+  - EquirectToPersp           : Extract perspective view from equirect panorama
+  - PerspToEquirect           : Composite perspective patch back to equirect
+
 ENHANCEMENT NODES:
   - Equirect360EmptyLatent   : 2:1 aspect ratio latent helper
   - Equirect360EdgeBlender   : Edge blending for seamless wrap
@@ -55,6 +59,12 @@ from .nodes_kontext import (
     NODE_DISPLAY_NAME_MAPPINGS as KONTEXT_NAMES,
 )
 
+# Projection nodes (equirect ↔ perspective)
+from .nodes_projection import (
+    NODE_CLASS_MAPPINGS as PROJECTION_NODES,
+    NODE_DISPLAY_NAME_MAPPINGS as PROJECTION_NAMES,
+)
+
 # Merge all node mappings
 NODE_CLASS_MAPPINGS = {
     **PIPELINE_NODES,
@@ -62,6 +72,7 @@ NODE_CLASS_MAPPINGS = {
     **ENHANCEMENT_NODES,
     **FLUX_PANO_NODES,
     **KONTEXT_NODES,
+    **PROJECTION_NODES,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -70,6 +81,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **ENHANCEMENT_NAMES,
     **FLUX_PANO_NAMES,
     **KONTEXT_NAMES,
+    **PROJECTION_NAMES,
 }
 
 # Register web directory for Three.js viewer
