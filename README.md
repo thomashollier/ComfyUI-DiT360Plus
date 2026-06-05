@@ -1,6 +1,6 @@
 # ComfyUI-DiT360Plus
 
-ComfyUI custom nodes for **360-degree panoramic image generation** using [DiT360](https://github.com/Insta360-Research-Team/DiT360) with FLUX.1-dev. Supports text-to-panorama generation, inpainting, and outpainting.
+ComfyUI custom nodes for **360-degree panoramic image generation** using [DiT360](https://github.com/Insta360-Research-Team/DiT360) with FLUX.1-dev, plus an alternative **Qwen-Image-2512 + Qwen 360 LoRA** workflow. Supports text-to-panorama generation, inpainting, and outpainting.
 
 Based on the research paper: [DiT360: Panoramic Image Generation](https://fenghora.github.io/DiT360-Page/)
 
@@ -174,11 +174,42 @@ Note: actual VRAM usage will be ~1GB above the set budget due to CUDA overhead, 
 | `gamma` | Inverter | Inversion fidelity | 1.0 |
 | `blend_width` | EdgeBlender | Edge blend width in pixels | 10-20 |
 
+## Alternative Model: Qwen-Image 360
+
+In addition to FLUX.1-dev + DiT360, this project ships an example workflow for **Qwen-Image-2512** + the [Qwen 360 Diffusion LoRA](https://huggingface.co/ProGamerGov/qwen-360-diffusion). The Qwen path uses only **built-in ComfyUI nodes** (UNETLoader, CLIPLoader, VAELoader, KSampler, LoRA loaders) — no custom pipeline code — and the project's `360 Edge Blender` + `360 Viewer` are chained onto the output for seamless wrap and in-node preview.
+
+### Required Models
+
+Place each file in the indicated `ComfyUI/models/` subfolder:
+
+| File | Folder | Source |
+|------|--------|--------|
+| `qwen_image_2512_fp8_e4m3fn.safetensors` | `diffusion_models/` | [Comfy-Org/Qwen-Image_ComfyUI](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors) |
+| `qwen_2.5_vl_7b_fp8_scaled.safetensors` | `text_encoders/` | [Comfy-Org/Qwen-Image_ComfyUI](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors) |
+| `qwen_image_vae.safetensors` | `vae/` | [Comfy-Org/Qwen-Image_ComfyUI](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors) |
+| `qwen-360-diffusion-2512-int8-bf16-v2.safetensors` | `loras/` | [ProGamerGov/qwen-360-diffusion](https://huggingface.co/ProGamerGov/qwen-360-diffusion/resolve/main/qwen-360-diffusion-2512-int8-bf16-v2.safetensors) |
+| `Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors` | `loras/` | [lightx2v/Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning/resolve/main/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors) |
+
+### Recommended Settings
+
+- **Resolution:** 2048 × 1024 (2:1). Smaller 2:1 sizes work but horizons may be less stable.
+- **Sampler:** `euler` + `simple`, `ModelSamplingAuraFlow` shift = 3.1.
+- **Lightning 4-step preset (default):** 4 steps, CFG 1.0 — both LoRAs stacked.
+- **Full quality preset:** 50 steps, CFG 4.0 — bypass the Lightning LoRA.
+- **Trigger phrases:** `equirectangular`, `360 image`, `360 panorama`, or `360 degree panorama with equirectangular projection`. The example workflow prefixes prompts with `equirectangular 360 image, …`.
+- **People:** describe head/face and shoes/boots for full-body shots to reduce limb distortion (poles of the sphere).
+
+### Notes
+
+- The base model is **FP8** while the 360 LoRA is **int8-trained** — rare patch/grid artifacts may appear. Lower the 360 LoRA strength or check the [model card](https://huggingface.co/ProGamerGov/qwen-360-diffusion) for int4 variants if you see them.
+- The Lightning LoRA is a speed booster, **not** 360-specific; you can remove it for higher-quality slow runs.
+
 ## Example Workflows
 
 Example workflows are included in the `examples/` folder:
 
-- `text_to_panorama.json` — Basic text-to-panorama generation
+- `text_to_panorama.json` — Basic text-to-panorama generation (FLUX + DiT360)
+- `qwen_image_panorama.json` — Text-to-panorama with Qwen-Image-2512 + Qwen 360 LoRA (Lightning 4-step)
 - `DiT360_inpainting.json` — RF-Inversion inpainting/outpainting
 - `LatLong_persp_inpainting.json` — Perspective extraction + Kontext editing
 

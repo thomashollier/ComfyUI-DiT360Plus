@@ -4,6 +4,8 @@
 
 ComfyUI custom nodes for 360-degree panoramic image generation using FLUX.1-dev with the DiT360 LoRA adapter. Supports text-to-panorama, inpainting, and outpainting.
 
+An alternative **Qwen-Image-2512 + Qwen 360 Diffusion LoRA** workflow is shipped as `examples/qwen_image_panorama.json`. It uses **only built-in ComfyUI nodes** (UNETLoader, CLIPLoader, VAELoader, LoraLoaderModelOnly, ModelSamplingAuraFlow, KSampler) — no custom pipeline code — and chains `Equirect360EdgeBlender` + `Equirect360Viewer` onto the output. There is no Python integration for this model path; it is purely a documented workflow.
+
 **Owner**: Thomas Hollier (thomashollier)
 **License**: Apache-2.0
 
@@ -94,6 +96,12 @@ Internal: `mask=1` = preserve from source, `mask=0` = generate new content.
 - Test text-to-pano at 1024 width with "model" offload first (fastest)
 - Test at 2048 with "balanced" offload
 - Editing pipeline needs an input image + mask
+
+### Qwen-Image Workflow Notes
+- Models live in standard ComfyUI dirs: `diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors`, `text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors`, `vae/qwen_image_vae.safetensors`, `loras/qwen-360-diffusion-2512-int8-bf16-v2.safetensors`, `loras/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors`.
+- Default preset in the example: Lightning 4-step, CFG 1.0, sampler `euler` + `simple`, `ModelSamplingAuraFlow` shift 3.1, 2048×1024.
+- Trigger phrases for the 360 LoRA: `equirectangular`, `360 image`, `360 panorama`, `360 degree panorama with equirectangular projection`.
+- FP8 base + int8 LoRA can produce rare patch artifacts — lower 360 LoRA strength or swap to an int4 variant from the model card.
 
 ## Dependencies
 
